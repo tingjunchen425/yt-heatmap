@@ -1,5 +1,7 @@
 import re
 import matplotlib.pyplot as plt
+import numpy as np
+from scipy.interpolate import interp1d, CubicSpline
 
 class svgGenerate:
     def route(self, svg_data):
@@ -13,7 +15,7 @@ class svgGenerate:
             self.single_d_attribute(element)
         elif len(elements) > 1:
             self.multiple_d_attributes(elements, chapter_widths)
-        plt.savefig('video_heatmap.svg')
+        plt.savefig('video_heatmap.png')
         plt.show()
             
 
@@ -53,20 +55,119 @@ class svgGenerate:
     
     def generate_svg(self, timestamps, heats):
         """
-        Generate SVG content from a list of 'd' attributes.
+        Generate SVG content from a list of 'd' attributes with Bezier curve interpolation.
         Args:
-            d_attributes (list): A list of 'd' attributes.
+            timestamps (list): List of timestamps (x values)
+            heats (list): List of heat values (y values)
         """
-    
+        if len(timestamps) < 2:
+            print("需要至少2個數據點來生成曲線")
+            return
+        
+        # 將列表轉換為numpy數組以便處理
+        timestamps = np.array(timestamps)
+        heats = np.array(heats)
+        
+        # 處理負數熱度值 - 轉換為絕對值
+        negative_count = np.sum(heats < 0)
+        if negative_count > 0:
+            print(f"發現 {negative_count} 個負數熱度值，將轉換為絕對值")
+            heats = np.abs(heats)
+        
+        # 處理重複的時間戳 - 保留唯一值並對應平均熱度
+        unique_timestamps = []
+        unique_heats = []
+        
+        i = 0
+        while i < len(timestamps):
+            current_timestamp = timestamps[i]
+            current_heats = [heats[i]]
+            
+            # 收集相同時間戳的所有熱度值
+            j = i + 1
+            while j < len(timestamps) and abs(timestamps[j] - current_timestamp) < 1e-10:
+                current_heats.append(heats[j])
+                j += 1
+            
+            # 使用平均值或最大值
+            unique_timestamps.append(current_timestamp)
+            unique_heats.append(np.mean(current_heats))  # 可以改為 np.max(current_heats)
+            
+            i = j
+        
+        # 轉換為numpy數組
+        timestamps = np.array(unique_timestamps)
+        heats = np.array(unique_heats)
+        
+        # 確保時間戳嚴格遞增
+        if len(timestamps) > 1:
+            for i in range(1, len(timestamps)):
+                if timestamps[i] <= timestamps[i-1]:
+                    timestamps[i] = timestamps[i-1] + 1e-10
+        
+        print(f"處理後的數據點: {len(timestamps)} 個")
+        print(f"時間戳範圍: {timestamps.min():.6f} - {timestamps.max():.6f}")
+        print(f"熱度範圍: {heats.min():.3f} - {heats.max():.3f}")
+        
+        if len(timestamps) < 2:
+            print("處理後數據點不足，無法生成曲線")
+            return
+        
+        # 創建更密集的插值點
+        num_points = max(len(timestamps) * 10, 100)  # 至少100個點
+        timestamps_interp = np.linspace(timestamps.min(), timestamps.max(), num_points)
+        
+        # 使用三次樣條插值創建平滑曲線
+        try:
+            cs = CubicSpline(timestamps, heats, bc_type='natural')
+            heats_interp = cs(timestamps_interp)
+            # 插值後也可能產生負值，再次處理
+            heats_interp = np.abs(heats_interp)
+        except ValueError as e:
+            print(f"插值失敗: {e}")
+            # 回退到線性插值
+            interp_func = interp1d(timestamps, heats, kind='linear', fill_value='extrapolate')
+            heats_interp = interp_func(timestamps_interp)
+            # 線性插值後也處理負值
+            heats_interp = np.abs(heats_interp)
+        
         # 繪製波型 heatmap
         plt.figure(figsize=(30, 6))
-        plt.plot(timestamps, heats)
-        plt.scatter(timestamps, heats, c=heats, s=20)
-        plt.xlabel('Video progress (ratio)')
-        plt.ylabel('heat')
-        plt.title('video heatmap')
-        # plt.colorbar(label='heat intensity')
+        
+        # 繪製原始數據點
+        scatter = plt.scatter(timestamps, heats, c=heats, s=50, cmap='hot', alpha=0.8, 
+                             edgecolors='black', linewidth=1, label='raw data points', zorder=3)
+        
+        # 繪製插值後的平滑曲線
+        line = plt.plot(timestamps_interp, heats_interp, linewidth=2, color='darkred', 
+                       alpha=0.7, label='Bezier interpolation curve')
+        
+        # 使用漸層填充創建更好的視覺效果
+        plt.fill_between(timestamps_interp, heats_interp, alpha=0.3, color='red')
+        
+        # 添加熱力圖效果 - 使用scatter的顏色映射
+        scatter_interp = plt.scatter(timestamps_interp, heats_interp, c=heats_interp, 
+                                    s=5, cmap='hot', alpha=0.6, zorder=2)
+        
+        # 設置標籤和標題
+        plt.xlabel('Video progress (ratio)', fontsize=12)
+        plt.ylabel('heat', fontsize=12)
+        plt.title('yt-heatmap', fontsize=14)
+        
+        
+        # 添加圖例
+        plt.legend()
+        
+        # 設置網格
+        plt.grid(True, alpha=0.3)
+        
+        # 調整佈局
         plt.tight_layout()
+        
+        # 可選：輸出插值後的數據統計
+        print(f"原始數據點: {len(timestamps)} 個")
+        print(f"插值後數據點: {len(timestamps_interp)} 個")
+        print(f"最終熱度範圍: {heats_interp.min():.3f} - {heats_interp.max():.3f}")
 
     def analyze_d_attribute(self, d_attribute):
         """
